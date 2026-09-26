@@ -7,8 +7,8 @@
 # MAGIC **Ergast Motor Racing Database**, com 14 arquivos CSV.
 # MAGIC
 # MAGIC **Fluxo deste notebook**
-# MAGIC 1. Autentica na API do Kaggle. A chave vem de um *secret scope* ou do arquivo `kaggle.json` guardado no volume
-# MAGIC    `config.credenciais`, **nunca escrita no código**.
+# MAGIC 1. Autentica na API do Kaggle com um **API Token** (padrão atual do Kaggle). O token vem de um *secret scope*
+# MAGIC    ou de um arquivo guardado no volume `config.credenciais`, e **nunca é escrito no código**.
 # MAGIC 2. Baixa e descompacta o dataset no volume `landing.arquivos`.
 # MAGIC 3. Grava cada CSV como uma tabela Delta na Bronze, **sem alterar valores**. Todas as colunas ficam como texto e o
 # MAGIC    marcador de nulo do Ergast (`\N`) é mantido como veio.
@@ -16,14 +16,16 @@
 
 # COMMAND ----------
 
-# MAGIC %pip install kaggle==1.6.17 --quiet
+# MAGIC %pip install "kaggle>=1.8.0" --quiet
 
 # COMMAND ----------
 
 CATALOGO = "mvp_f1"
 DATASET_KAGGLE = "rohanrao/formula-1-world-championship-1950-2020"
 PASTA_LANDING = f"/Volumes/{CATALOGO}/landing/arquivos"
-ARQUIVO_CREDENCIAL = f"/Volumes/{CATALOGO}/config/credenciais/kaggle.json"
+PASTA_CREDENCIAIS = f"/Volumes/{CATALOGO}/config/credenciais"
+ARQUIVO_TOKEN = f"{PASTA_CREDENCIAIS}/kaggle_token.txt"   # API Token (recomendado pelo Kaggle)
+ARQUIVO_LEGADO = f"{PASTA_CREDENCIAIS}/kaggle.json"       # Legacy API Credentials (alternativa)
 FORCAR_DOWNLOAD = False   # True = baixa de novo mesmo que os arquivos já estejam no volume
 
 ARQUIVOS_ESPERADOS = [
@@ -36,37 +38,48 @@ ARQUIVOS_ESPERADOS = [
 
 # MAGIC %md
 # MAGIC ### 1–2. Autenticação e download
-# MAGIC **Como configurar a credencial (uma vez):** no Kaggle, *Settings → API → Create New Token* baixa o `kaggle.json`.
-# MAGIC Depois, escolha uma opção:
-# MAGIC - **Opção A (recomendada):** secret scope, pela CLI do Databricks:
-# MAGIC   `databricks secrets create-scope kaggle`, `databricks secrets put-secret kaggle username` e `... put-secret kaggle key`.
-# MAGIC - **Opção B:** enviar o `kaggle.json` pela UI para *Catalog → mvp_f1 → config → credenciais*.
+# MAGIC **Como configurar a credencial (uma vez):** no Kaggle, *Settings → API Tokens → Generate New Token* e copie o token.
+# MAGIC Depois, escolha uma opção (a primeira encontrada é usada):
+# MAGIC - **Opção A:** secret scope, pela CLI do Databricks: `databricks secrets create-scope kaggle` e
+# MAGIC   `databricks secrets put-secret kaggle token`.
+# MAGIC - **Opção B:** salvar o token (só o texto do token, uma linha) num arquivo `kaggle_token.txt` e enviar pela UI para
+# MAGIC   *Catalog → mvp_f1 → config → credenciais*.
+# MAGIC - **Opção C (legado):** enviar o `kaggle.json` gerado em *Legacy API Credentials* para o mesmo volume.
+# MAGIC
+# MAGIC A biblioteca `kaggle` se autentica sozinha **no momento do import**, lendo as variáveis de ambiente
+# MAGIC (`KAGGLE_API_TOKEN` ou `KAGGLE_USERNAME`/`KAGGLE_KEY`). Por isso as variáveis são definidas antes do `import kaggle`,
+# MAGIC e usamos o objeto já autenticado `kaggle.api`.
 
 # COMMAND ----------
 
 import os, json
 
 def carregar_credenciais_kaggle():
-    """Define KAGGLE_USERNAME / KAGGLE_KEY a partir do secret scope ou do kaggle.json no volume."""
+    """Define as variáveis de ambiente de autenticação do Kaggle. Retorna de onde a credencial veio."""
     try:
-        os.environ["KAGGLE_USERNAME"] = dbutils.secrets.get("kaggle", "username")
-        os.environ["KAGGLE_KEY"] = dbutils.secrets.get("kaggle", "key")
-        return "secret scope 'kaggle'"
+        os.environ["KAGGLE_API_TOKEN"] = dbutils.secrets.get("kaggle", "token")
+        return "secret scope 'kaggle' (API Token)"
     except Exception:
-        with open(ARQUIVO_CREDENCIAL) as f:
+        pass
+    if os.path.exists(ARQUIVO_TOKEN):
+        with open(ARQUIVO_TOKEN) as f:
+            os.environ["KAGGLE_API_TOKEN"] = f.read().strip()
+        return f"{ARQUIVO_TOKEN} (API Token)"
+    if os.path.exists(ARQUIVO_LEGADO):
+        with open(ARQUIVO_LEGADO) as f:
             cred = json.load(f)
-        os.environ["KAGGLE_USERNAME"] = cred["username"]
-        os.environ["KAGGLE_KEY"] = cred["key"]
-        return ARQUIVO_CREDENCIAL
+        os.environ["KAGGLE_USERNAME"], os.environ["KAGGLE_KEY"] = cred["username"], cred["key"]
+        return f"{ARQUIVO_LEGADO} (credencial legada)"
+    raise FileNotFoundError(
+        f"Nenhuma credencial do Kaggle encontrada. Envie kaggle_token.txt (ou kaggle.json) para {PASTA_CREDENCIAIS}.")
 
 def arquivos_presentes():
     return {f[:-4] for f in os.listdir(PASTA_LANDING) if f.endswith(".csv")}
 
 if FORCAR_DOWNLOAD or not set(ARQUIVOS_ESPERADOS) <= arquivos_presentes():
     origem = carregar_credenciais_kaggle()
-    from kaggle.api.kaggle_api_extended import KaggleApi   # importar só depois de definir as variáveis
-    api = KaggleApi()
-    api.authenticate()
+    import kaggle            # autentica no import, usando as variáveis definidas acima
+    api = kaggle.api
     print(f"Autenticado no Kaggle via {origem}. Baixando {DATASET_KAGGLE} ...")
     api.dataset_download_files(DATASET_KAGGLE, path=PASTA_LANDING, unzip=True, quiet=False)
 else:
