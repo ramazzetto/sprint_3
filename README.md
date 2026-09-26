@@ -6,18 +6,18 @@ Plataforma: Databricks Free Edition (Unity Catalog e Delta Lake), com notebooks 
 Fonte: dataset de F1 do Kaggle (1950 a 2024), baixado pela API.
 
 ## Sumário
-1. [Objetivo e perguntas](#1-objetivo-e-perguntas)
-2. [Coleta e carga](#2-coleta-e-carga)
-3. [Modelagem e catálogo](#3-modelagem-e-catálogo)
-4. [Pipeline](#4-pipeline)
-5. [Qualidade dos dados](#5-qualidade-dos-dados)
-6. [Análise](#6-análise)
+1. [Contexto de Negócios e Perguntas (Etapa 2 e 4.1)](#1-contexto-de-negócios-e-perguntas-etapa-2-e-41)
+2. [Carga dos Dados (Etapa 4.2)](#2-carga-dos-dados-etapa-42)
+3. [Modelagem e Catálogo de Dados (Etapa 4.3)](#3-modelagem-e-catálogo-de-dados-etapa-43)
+4. [Pipeline de Dados (Etapa 4.4)](#4-pipeline-de-dados-etapa-44)
+5. [Qualidade de Dados (Etapa 4.5)](#5-qualidade-de-dados-etapa-45)
+6. [Análise de Dados (Etapa 4.5)](#6-análise-de-dados-etapa-45)
 7. [Autoavaliação](#7-autoavaliação)
 8. [Como rodar](#8-como-rodar)
 
 ---
 
-## 1. Objetivo e perguntas
+## 1. Contexto de Negócios e Perguntas (Etapa 2 e 4.1)
 
 Sempre ouvi que na F1 "corrida se ganha na pista e campeonato se ganha na fábrica". Quis ver o que os dados dizem sobre isso: o que realmente pesa no resultado de uma corrida (a posição de largada, a estratégia de pit stop, a confiabilidade do carro, o piloto, correr em casa) e se isso mudou com o tempo.
 
@@ -57,7 +57,7 @@ CC0 (domínio público), conforme a página do Kaggle. Pode ser usado para qualq
 
 ---
 
-## 2. Coleta e carga
+## 2. Carga dos Dados (Etapa 4.2)
 
 **Setup** (`00_setup.sql`): cria o catálogo `mvp_f1`, os schemas `landing`, `config`, `bronze`, `silver` e `gold`, e dois volumes: `landing.arquivos` para os CSVs e `config.credenciais` para o token do Kaggle.
 
@@ -69,12 +69,12 @@ Se os arquivos já estiverem no volume o download é pulado, então dá pra roda
 
 **Bronze:** cada CSV virou uma tabela Delta com o mesmo nome, sem mexer em nenhum valor. Tudo como texto e o `\N` mantido. Acrescentei três colunas de controle (arquivo de origem, fonte e data da ingestão), e cada carga fica registrada em `bronze.controle_ingestao`.
 
-(print: volume com os CSVs) `docs/img/01_volume.png`
-(print: tabela controle_ingestao) `docs/img/02_controle_ingestao.png`
+![volume com os CSVs](docs/img/01_volume.png)
+![tabela controle_ingestao](docs/img/02_controle_ingestao.png)
 
 ---
 
-## 3. Modelagem e catálogo
+## 3. Modelagem e Catálogo de Dados (Etapa 4.3)
 
 Escolhi um modelo estrela com duas tabelas fato. Quase todas as perguntas giram em torno de dois eventos: o resultado de um piloto numa corrida e uma parada nos boxes. Os dois são descritos pelas mesmas dimensões (corrida, piloto, equipe), então as dimensões são compartilhadas.
 
@@ -142,13 +142,13 @@ Algumas decisões:
 
 O catálogo de dados completo, com descrição, tipo, domínio e origem de cada coluna, está em [docs/catalogo_dados.md](docs/catalogo_dados.md). As mesmas descrições foram gravadas como COMMENT nas tabelas, então também aparecem no Catalog Explorer.
 
-(print: colunas comentadas da fato_resultado) `docs/img/03_catalogo_fato.png`
-(print: diagrama de relacionamentos) `docs/img/04_erd.png`
-(print: aba Lineage da fato_resultado) `docs/img/05_lineage.png`
+![colunas comentadas da fato_resultado](docs/img/03_catalogo_fato.png)
+![diagrama de relacionamentos](docs/img/04_erd.png)
+![aba Lineage da fato_resultado](docs/img/05_lineage.png)
 
 ---
 
-## 4. Pipeline
+## 4. Pipeline de Dados (Etapa 4.4)
 
 Separei o pipeline em um notebook por etapa:
 
@@ -181,12 +181,12 @@ As dimensões vêm direto da Silver e as fatos são montadas com joins. A carga 
 
 Os notebooks 01 a 05 foram encadeados num Job do Databricks, uma tarefa por notebook, cada uma dependendo da anterior.
 
-(print: job com a execução) `docs/img/06_job.png`
-(print: tabelas nos schemas bronze/silver/gold) `docs/img/07_tabelas.png`
+![job com a execução](docs/img/06_job.png)
+![tabelas nos schemas bronze/silver/gold](docs/img/07_tabelas.png)
 
 ---
 
-## 5. Qualidade dos dados
+## 5. Qualidade de Dados (Etapa 4.5)
 
 A análise completa está no notebook `02_qualidade_bronze.py`. Resumo do que encontrei:
 
@@ -206,19 +206,19 @@ O que mais pesou foi a cobertura: tem resultado de 1950 a 2024, mas qualifying s
 
 No final do notebook 03 coloquei asserts que param a execução se alguma regra básica falhar: chave duplicada, posição inválida, ponto negativo, corrida sem data ou país sem padronizar.
 
-(print: completude) `docs/img/08_completude.png`
-(print: outliers de pit stop) `docs/img/09_outliers_pit.png`
+![completude](docs/img/08_completude.png)
+![outliers de pit stop](docs/img/09_outliers_pit.png)
 
 ---
 
-## 6. Análise
+## 6. Análise de Dados (Etapa 4.5)
 
 Consultas em [05_analise.sql](notebooks/05_analise.sql).
 
 ### 1. A pole decide a corrida?
 Calculei, por era, quantas poles viraram vitória, o grid médio de quem venceu e a correlação entre posição de largada e de chegada. Também fiz um ranking por circuito (mínimo de 10 corridas).
 
-`docs/img/p1_pole.png`
+![resultado da pergunta 1](docs/img/p1_pole.png)
 
 Decide mais hoje do que antigamente. Nos anos 50 a 70 quem largava na pole vencia em torno de 37% das vezes, e nos anos 80 caiu para 28%, que era a época em que o carro quebrava muito. A partir dos anos 2000 passou para 50% e ficou por aí (52% nos anos 2020). A correlação entre posição de largada e de chegada vai no mesmo sentido: 0,43 na era clássica, 0,33 nos anos 80 e 0,63 hoje. E em 88% das corridas da era híbrida o vencedor largou entre os três primeiros.
 
@@ -227,7 +227,7 @@ Por circuito o resultado me surpreendeu. Esperava Mônaco no topo, mas lá a pol
 ### 2. Pit stops
 Mediana do tempo no pit lane por temporada (sem as atípicas), e posições ganhas / % de pódio por número de paradas, só de quem terminou a prova.
 
-`docs/img/p2_pit.png`
+![resultado da pergunta 2](docs/img/p2_pit.png)
 
 Aqui a resposta é não. Com os dados que existem (2011 a 2024) a mediana do tempo no pit lane ficou praticamente parada: 22 segundos entre 2011 e 2013 e em torno de 23,5 a 24 segundos depois disso. Imagino que a troca de pneus em si tenha ficado mais rápida, mas o dataset mede o tempo inteiro dentro do pit lane, que depende mais do tamanho do pit lane e do limite de velocidade do que da equipe. Não dá para separar as duas coisas com esse dado.
 
@@ -238,7 +238,7 @@ Sobre estratégia: entre os pilotos que terminaram a prova, quem parou uma vez g
 ### 3. Confiabilidade
 Como os pilotos que largaram terminaram a prova, por década (terminou, quebrou, acidente), e as 3 quebras mais comuns em cada era.
 
-`docs/img/p3_confiabilidade.png`
+![resultado da pergunta 3](docs/img/p3_confiabilidade.png)
 
 Essa é a resposta mais clara do projeto. Até os anos 90 só metade dos pilotos que largavam chegava ao fim (45% nos anos 80). Nos anos 2000 foram 69%, nos 2010 81% e nos 2020 86%.
 
@@ -249,7 +249,7 @@ O motor foi o componente que mais quebrou em todas as eras, só que em número a
 ### 4. Carro ou piloto
 Comparei a posição no qualifying entre os dois pilotos da mesma equipe em cada corrida. Ranking de quem mais venceu esse duelo, com pelo menos 50 duelos.
 
-`docs/img/p4_companheiros.png`
+![resultado da pergunta 4](docs/img/p4_companheiros.png)
 
 Os campeões aparecem, mas não só eles. No topo estão Häkkinen (81% dos duelos vencidos), Verstappen (78%), Russell (75%) e Alonso (73%, em 385 duelos, o que para mim é o número mais impressionante da lista pela quantidade). Hamilton ficou com 62%, abaixo do que eu esperava, mas ele passou boa parte da carreira ao lado de companheiros fortes, como Alonso, Rosberg, Bottas e Russell.
 
@@ -260,7 +260,7 @@ Duas limitações importantes: só tem qualifying a partir de 1994 (Senna, Prost
 ### 5. Correr em casa
 Comparei o mesmo piloto na mesma temporada: resultado no GP de casa contra a média dele nas outras corridas do ano. Fiz assim para não misturar com piloto local convidado que só corre em casa, geralmente com carro fraco.
 
-`docs/img/p5_casa.png`
+![resultado da pergunta 5](docs/img/p5_casa.png)
 
 Existe, mas é pequena. Comparando o mesmo piloto na mesma temporada, ele chega em média 0,09 posição à frente no GP de casa, e em 55% dos casos foi melhor em casa do que fora. A taxa de pódio sobe de 12,7% para 14%. É uma diferença tão pequena que eu não afirmaria que é vantagem de verdade e não ruído.
 
@@ -269,7 +269,7 @@ A tabela por país mostra bem por que a comparação pareada era necessária. Es
 ### 6. Competitividade
 Por era: média de vencedores diferentes por temporada, % de vitórias da equipe mais vitoriosa e margem do campeão. Mais o top 5 de temporadas mais dominadas e mais disputadas.
 
-`docs/img/p6_competitividade.png`
+![resultado da pergunta 6](docs/img/p6_competitividade.png)
 
 Ficou menos disputada nas últimas eras. Na era híbrida (2014 a 2021) a equipe mais vitoriosa ganhou em média 71% das corridas de cada temporada, a maior taxa de todas. De 2022 a 2024 foi 70%, puxado por 2023, a temporada mais dominada da história: a Red Bull venceu 95,5% das corridas e Verstappen foi campeão com 50% de vantagem sobre o vice. A era mais equilibrada foi a de 1968 a 1982, com 41% e quase 7 vencedores diferentes por ano.
 
