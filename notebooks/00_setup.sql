@@ -1,20 +1,15 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # 00 · Setup do ambiente
+-- MAGIC # 00 - Setup
 -- MAGIC
--- MAGIC Cria a estrutura do Lakehouse no Unity Catalog seguindo a **Arquitetura Medalhão**:
+-- MAGIC Cria o catálogo, os schemas e os volumes do projeto. Rodar uma vez só (se rodar de novo não dá problema, está tudo com IF NOT EXISTS).
 -- MAGIC
--- MAGIC | Objeto | Papel |
--- MAGIC |---|---|
--- MAGIC | `mvp_f1` (catálogo) | Agrupa todo o projeto |
--- MAGIC | `mvp_f1.landing.arquivos` (volume) | Arquivos CSV exatamente como baixados do Kaggle |
--- MAGIC | `mvp_f1.config.credenciais` (volume) | `kaggle.json` com a chave da API (**nunca vai para o Git**) |
--- MAGIC | `mvp_f1.bronze` | Dado como veio, em Delta, com metadados de ingestão |
--- MAGIC | `mvp_f1.silver` | Dado limpo, tipado e padronizado (uma tabela por entidade) |
--- MAGIC | `mvp_f1.gold` | Esquema estrela + agregados para responder às perguntas |
+-- MAGIC Organização que escolhi:
+-- MAGIC - `landing.arquivos`: volume onde ficam os CSVs do jeito que vêm do Kaggle
+-- MAGIC - `config.credenciais`: volume para o token do Kaggle (não vai pro GitHub de jeito nenhum)
+-- MAGIC - `bronze`, `silver` e `gold`: as três camadas da arquitetura medalhão
 -- MAGIC
--- MAGIC > Se o Free Edition não permitir criar um catálogo novo, use o catálogo padrão do workspace
--- MAGIC > (ex.: `workspace`) e troque `mvp_f1` por ele em todos os notebooks.
+-- MAGIC Obs: no Free Edition consegui criar o catálogo `mvp_f1` normalmente. Se der erro de permissão, dá pra usar o catálogo `workspace` e trocar o nome nos notebooks.
 
 -- COMMAND ----------
 
@@ -37,8 +32,9 @@ CREATE VOLUME IF NOT EXISTS landing.arquivos
 COMMENT 'CSVs do dataset Kaggle rohanrao/formula-1-world-championship-1950-2020 (fonte original: Ergast)';
 
 CREATE VOLUME IF NOT EXISTS config.credenciais
-COMMENT 'Guarda o kaggle.json usado pela ingestão. Não versionar.';
+COMMENT 'Token da API do Kaggle usado na ingestão. Não versionar.';
 
 -- COMMAND ----------
 
+-- conferindo se criou tudo
 SHOW SCHEMAS IN mvp_f1;

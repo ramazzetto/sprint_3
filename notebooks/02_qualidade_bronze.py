@@ -1,19 +1,9 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 02 · Perfil de Qualidade dos Dados (Bronze)
+# MAGIC # 02 - Qualidade dos dados (Bronze)
 # MAGIC
-# MAGIC Antes de transformar, medimos a qualidade do dado bruto:
-# MAGIC
-# MAGIC | Dimensão | Pergunta | Seção |
-# MAGIC |---|---|---|
-# MAGIC | Completude | Quantos `\N` / vazios existem por coluna? | 1 |
-# MAGIC | Unicidade | As chaves primárias são únicas? | 2 |
-# MAGIC | Integridade referencial | Toda chave estrangeira aponta para um registro existente? | 3 |
-# MAGIC | Consistência | Datas, tempos e números seguem o formato? Há grafias diferentes para o mesmo valor? | 4 |
-# MAGIC | Acurácia | Os valores fazem sentido (idade do piloto, grid, pontos, voltas)? | 5 |
-# MAGIC | Outliers | Há valores extremos (ex.: paradas nos boxes de vários minutos)? | 6 |
-# MAGIC
-# MAGIC Cada achado vira uma regra no notebook `03_silver_transformacao` (resumo no fim).
+# MAGIC Antes de sair limpando, quis entender o que tinha de errado no dado bruto. Separei a análise por dimensão de qualidade (completude, unicidade, integridade, consistência, acurácia e outliers).
+# MAGIC Tudo que aparece aqui vira alguma regra de tratamento no notebook 03. Este notebook só lê, não grava nada.
 
 # COMMAND ----------
 
@@ -29,7 +19,7 @@ TABELAS = ["circuits", "constructors", "drivers", "races", "results", "qualifyin
 
 # MAGIC %md
 # MAGIC ## 1. Completude
-# MAGIC No Ergast o nulo é o texto `\N`. Contamos `\N`, vazio e `NULL` por coluna.
+# MAGIC Primeira surpresa: o Ergast não usa nulo de verdade, ele grava o texto `\N`. Então contei `\N`, string vazia e NULL juntos, por coluna.
 
 # COMMAND ----------
 
@@ -48,7 +38,7 @@ display(completude.filter("nulos > 0").orderBy(F.desc("pct_nulos")))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 2. Unicidade das chaves
+# MAGIC ## 2. Unicidade
 
 # COMMAND ----------
 
@@ -74,8 +64,7 @@ display(spark.createDataFrame(res, "tabela string, chave string, linhas long, di
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC Se houver duplicados na chave de negócio de `results`, vale inspecionar: no início da F1 era permitido **dividir
-# MAGIC o carro** (dois pilotos no mesmo carro), o que gera casos legítimos.
+# MAGIC Os ids são únicos, mas apareceram pilotos com mais de um resultado na mesma corrida. Fui pesquisar e é coisa dos anos 50: era permitido dois pilotos dividirem o mesmo carro, e às vezes o piloto trocava de carro no meio da prova. Não é erro, então vou manter.
 
 # COMMAND ----------
 
@@ -88,7 +77,8 @@ GROUP BY ALL HAVING COUNT(*) > 1 ORDER BY ra.year LIMIT 20
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 3. Integridade referencial (registros órfãos)
+# MAGIC ## 3. Integridade referencial
+# MAGIC Procurando registros órfãos (chave estrangeira que não existe na tabela de origem).
 
 # COMMAND ----------
 
@@ -105,7 +95,8 @@ UNION ALL SELECT 'pit_stops -> results',    COUNT(*) FROM {B}.pit_stops x LEFT A
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 4. Consistência (formatos e grafias)
+# MAGIC ## 4. Consistência
+# MAGIC Como tudo chegou como texto, conferi se datas, tempos e números seguem o mesmo formato.
 
 # COMMAND ----------
 
@@ -135,7 +126,7 @@ SELECT 'drivers.nationality com espaços extras',
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Domínios: grafias diferentes para a mesma coisa?
+# MAGIC Olhando os valores distintos de país e nacionalidade atrás de grafias diferentes para a mesma coisa:
 
 # COMMAND ----------
 
@@ -148,8 +139,7 @@ display(spark.table(f"{B}.drivers").groupBy("nationality").count().orderBy("nati
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC `status` tem mais de 130 valores (ex.: `Engine`, `Gearbox`, `+1 Lap`, `Accident`). Para analisar confiabilidade eles
-# MAGIC precisam ser **agrupados em categorias**, o que é feito na Silver.
+# MAGIC O `status` tem mais de 130 valores diferentes (Engine, Gearbox, +1 Lap, Accident...). Do jeito que está não dá pra analisar abandono, vou agrupar em categorias na Silver.
 
 # COMMAND ----------
 
@@ -162,7 +152,8 @@ GROUP BY s.status ORDER BY resultados DESC
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 5. Acurácia (valores plausíveis)
+# MAGIC ## 5. Acurácia
+# MAGIC Checando se os valores fazem sentido: grid, posição, pontos, voltas e idade do piloto na corrida.
 
 # COMMAND ----------
 
@@ -190,9 +181,9 @@ FROM r
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 6. Outliers: duração das paradas nos boxes
-# MAGIC Uma parada normal dura de ~20 a ~30 s (tempo total no pit lane). Paradas de vários minutos acontecem em
-# MAGIC **bandeira vermelha** ou em **reparos**, e distorcem médias. Usamos a regra Q3 + 3·IQR por temporada.
+# MAGIC ## 6. Outliers nos pit stops
+# MAGIC Um pit stop normal fica entre 20 e 30 segundos contando o tempo no pit lane. Mas tem parada de vários minutos (bandeira vermelha, conserto do carro) e isso estraga qualquer média.
+# MAGIC Usei Q3 + 3*IQR calculado por temporada, porque o tempo médio mudou bastante ao longo dos anos.
 
 # COMMAND ----------
 
@@ -216,20 +207,18 @@ ORDER BY p.year
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Resumo: problema → tratamento na Silver
+# MAGIC ## O que vou tratar na Silver
 # MAGIC
-# MAGIC > **Preencha os números** com os resultados das células acima antes de copiar para o README.
+# MAGIC Juntando tudo que encontrei:
 # MAGIC
-# MAGIC | # | Dimensão | Problema | Tratamento na Silver |
-# MAGIC |---|---|---|---|
-# MAGIC | 1 | Completude | Nulo representado pelo texto `\N` | `\N` e vazio → `NULL` em todas as colunas |
-# MAGIC | 2 | Completude | `results.position`, `time`, `milliseconds` nulos para quem não terminou | Mantidos `NULL`; `position_order` (sempre preenchido) usado nas análises |
-# MAGIC | 3 | Completude | `qualifying` e `pit_stops` só existem nas temporadas mais recentes | Cobertura documentada; análises dessas perguntas limitadas ao período com dado |
-# MAGIC | 4 | Consistência | Tudo como texto | Cast para `INT`, `DOUBLE`, `DATE` com `try_cast` |
-# MAGIC | 5 | Consistência | Tempos como texto `m:ss.sss` (Q1/Q2/Q3) | Convertidos para milissegundos (`BIGINT`) |
-# MAGIC | 6 | Consistência | País do circuito com 2 grafias (`USA` e `United States`) | Padronizado para `United States`; `UK` → `United Kingdom`; `UAE` → `United Arab Emirates` |
-# MAGIC | 7 | Consistência | Nacionalidade com espaço sobrando e sinônimos (`Argentinian ` × `Argentine`) | `TRIM` + padronização |
-# MAGIC | 8 | Consistência | 130+ status distintos | Nova coluna `categoria_status` (FINALIZOU, ACIDENTE, FALHA_MECANICA, …) |
-# MAGIC | 9 | Unicidade | Piloto com 2 resultados na mesma corrida (carro dividido, anos 1950) | Mantidos (fato histórico), documentados |
-# MAGIC | 10 | Acurácia | `grid = 0` significa largada dos boxes / não largou, não "pole" | `grid` 0 → `NULL` + `flag_largou_boxes` |
-# MAGIC | 11 | Outliers | Paradas de minutos (bandeira vermelha/reparo) | `flag_parada_atipica`; excluídas das médias de pit stop |
+# MAGIC - `\N` e texto vazio viram NULL em todas as colunas
+# MAGIC - `position`, `time` e `milliseconds` ficam nulos para quem não terminou a corrida. Mantive assim e uso `positionOrder` (sempre preenchido) quando preciso de posição
+# MAGIC - qualifying e pit stops só existem nas temporadas mais recentes, então as perguntas que dependem deles ficam limitadas a esse período
+# MAGIC - tudo é texto: converto com `try_cast` para não quebrar em valor estranho
+# MAGIC - tempos de classificação vêm como "1:23.456", converto para milissegundos
+# MAGIC - país do circuito aparece como USA e United States (e UK, UAE). Padronizei com o nome completo
+# MAGIC - nacionalidade tem espaço sobrando e sinônimos (Argentinian / Argentine), resolvo com trim e um de-para
+# MAGIC - os 130+ status viram uma coluna de categoria (terminou, acidente, falha mecânica etc.)
+# MAGIC - resultados duplicados por carro dividido nos anos 50: mantidos
+# MAGIC - `grid = 0` não é pole, é quem largou dos boxes ou não largou. Viro NULL e crio uma flag
+# MAGIC - paradas muito longas ganham uma flag e ficam de fora das médias de pit stop

@@ -1,9 +1,8 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # 05 · Análise: respondendo às perguntas de negócio
+-- MAGIC # 05 - Análise
 -- MAGIC
--- MAGIC Todas as consultas usam a camada **Gold**. Depois de rodar, registre abaixo de cada pergunta (célula "Discussão")
--- MAGIC o que os números mostram, e tire um screenshot do resultado/gráfico para o README.
+-- MAGIC Respondendo as 6 perguntas do projeto usando só a Gold. Em quase todas as consultas filtro `flag_largou` para não contar quem nem largou.
 
 -- COMMAND ----------
 
@@ -12,11 +11,11 @@ USE CATALOG mvp_f1;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P1 · Largar na pole decide a corrida? Isso mudou ao longo das eras e varia por circuito?
+-- MAGIC ## Pergunta 1 - Largar na pole decide a corrida? Mudou com as eras? Depende do circuito?
 
 -- COMMAND ----------
 
--- Conversão pole → vitória e correlação grid × chegada, por era
+-- quanto a pole vira vitória em cada era
 SELECT d.era_regulamentar,
        COUNT(DISTINCT d.sk_corrida)                                              AS corridas,
        ROUND(100 * AVG(CASE WHEN f.flag_pole THEN CAST(f.flag_vitoria AS INT) END), 1) AS pct_pole_vence,
@@ -31,7 +30,7 @@ ORDER BY d.era_regulamentar;
 
 -- COMMAND ----------
 
--- Circuitos onde a pole mais (e menos) vira vitória (mínimo de 10 corridas)
+-- por circuito (só os que tiveram pelo menos 10 corridas)
 SELECT d.circuito_nome, d.circuito_pais,
        COUNT(*)                                            AS corridas,
        ROUND(100 * AVG(CAST(f.flag_vitoria AS INT)), 1)    AS pct_pole_vence
@@ -59,15 +58,14 @@ ORDER BY pct_pole_vence DESC;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P1:** _(preencher)_ — a pole ficou mais decisiva na era moderna? quais circuitos são "de pole"
--- MAGIC (difíceis de ultrapassar, como Mônaco) e onde a largada importa menos?
+-- MAGIC **Conclusão:** A pole pesa mais hoje do que antes: virava vitória em ~37% das vezes nos anos 50-70, 28% nos anos 80 (muita quebra) e passou de 50% a partir dos anos 2000. A correlação largada x chegada foi de 0,33 nos anos 80 para 0,63 hoje.
+-- MAGIC Por circuito, Barcelona, Abu Dhabi e Singapura são os mais "de pole". Monza e Spa, com reta longa, os menos. Mônaco ficou no meio (45%), o que eu não esperava.
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P2 · Os pit stops ficaram mais rápidos? E a estratégia de menos paradas compensa?
--- MAGIC A duração registrada é o **tempo total no pit lane** (entrada → saída), não só o tempo parado.
--- MAGIC Paradas atípicas (bandeira vermelha, reparos) são excluídas.
+-- MAGIC ## Pergunta 2 - Os pit stops ficaram mais rápidos? Parar menos compensa?
+-- MAGIC Cuidado na leitura: a duração no dataset é o tempo total dentro do pit lane, não só o carro parado. As paradas atípicas ficaram de fora.
 
 -- COMMAND ----------
 
@@ -84,7 +82,7 @@ ORDER BY d.ano;
 
 -- COMMAND ----------
 
--- Estratégia × resultado: pilotos que terminaram a prova, agrupados pelo nº de paradas
+-- só quem terminou a prova, agrupado pelo número de paradas
 SELECT d.era_regulamentar, f.qtd_pit_stops,
        COUNT(*)                          AS resultados,
        ROUND(AVG(f.posicoes_ganhas), 2)  AS media_posicoes_ganhas,
@@ -99,15 +97,13 @@ ORDER BY d.era_regulamentar, f.qtd_pit_stops;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P2:** _(preencher)_ — o tempo de pit lane caiu ou subiu (o fim do reabastecimento em 2010 muda
--- MAGIC tudo)? parar menos vezes está associado a ganhar posições? atenção: correlação não é causalidade (quem está na
--- MAGIC frente tende a fazer a estratégia "ideal").
+-- MAGIC **Conclusão:** O tempo no pit lane quase não mudou entre 2011 e 2024 (22 a 24s). Esse dado mede o pit lane inteiro, não só a troca de pneus, então depende mais do circuito do que da equipe.
+-- MAGIC O que caiu foi o número de paradas (2,55 por piloto em 2011, primeiro ano da Pirelli). Quem para menos ganha mais posições, mas isso não prova que parar menos seja melhor: quem para muito geralmente teve algum problema.
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P3 · A F1 ficou mais confiável? Como evoluíram abandonos por falha mecânica e por acidente?
--- MAGIC Base: pilotos que largaram (exclui não qualificados, retirados e desclassificados).
+-- MAGIC ## Pergunta 3 - A F1 ficou mais confiável? Como evoluíram os abandonos por quebra e por acidente?
 
 -- COMMAND ----------
 
@@ -126,7 +122,7 @@ ORDER BY d.decada;
 
 -- COMMAND ----------
 
--- Quais componentes mais quebravam em cada era? (top 3 por era)
+-- o que mais quebrava em cada era (top 3)
 WITH falhas AS (
   SELECT d.era_regulamentar, s.status, COUNT(*) AS ocorrencias,
          ROW_NUMBER() OVER (PARTITION BY d.era_regulamentar ORDER BY COUNT(*) DESC) AS rn
@@ -161,15 +157,14 @@ ORDER BY era_regulamentar, rn;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P3:** _(preencher)_ — em que década a confiabilidade deu o salto? motor e câmbio deixaram de ser o
--- MAGIC principal problema? os acidentes caíram na mesma proporção?
+-- MAGIC **Conclusão:** Maior mudança do projeto. Até os anos 90 só metade dos pilotos terminava a corrida, hoje são 86%. A queda veio principalmente das quebras (41% nos anos 80, 6% hoje). O motor sempre foi o que mais quebrou, mas passou de 513 quebras (1968-82) para 22 (2022-24).
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P4 · Carro ou piloto? Quem mais bateu o próprio companheiro de equipe na classificação?
--- MAGIC Com o mesmo carro, a diferença entre companheiros isola (em parte) o fator piloto. Compara-se a posição no
--- MAGIC qualifying de pares de pilotos da **mesma equipe na mesma corrida** (período com dados de qualifying).
+-- MAGIC ## Pergunta 4 - Carro ou piloto? Quem mais bateu o companheiro de equipe no treino classificatório?
+-- MAGIC A ideia é que com o mesmo carro a diferença fica mais por conta do piloto. Comparo a posição no qualifying dos dois pilotos da mesma equipe em cada corrida.
+-- MAGIC Só vale para o período que tem dado de qualifying, e coloquei mínimo de 50 duelos para não aparecer piloto com poucas corridas.
 
 -- COMMAND ----------
 
@@ -198,15 +193,15 @@ LIMIT 20;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P4:** _(preencher)_ — os campeões aparecem no topo? algum piloto com poucos títulos domina os
--- MAGIC companheiros (talento em carro ruim)? limitação: quem teve companheiro fraco é favorecido.
+-- MAGIC **Conclusão:** Häkkinen, Verstappen, Russell e Alonso lideram. O Alonso chama atenção pelos 385 duelos. Hamilton ficou em 62%, mas teve companheiros fortes. Aparecem também pilotos sem título (Buemi, Panis, Albon).
+-- MAGIC Limitação: só tem qualifying de 1994 em diante, e o resultado depende de quem foi o companheiro.
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P5 · Existe vantagem de correr em casa?
--- MAGIC Comparação **pareada**: para cada piloto e temporada em que ele correu em casa, compara o desempenho no GP de casa
--- MAGIC com a média dele nas demais corridas **da mesma temporada** (mesmo carro, mesmo ano).
+-- MAGIC ## Pergunta 5 - Piloto corre melhor em casa?
+-- MAGIC Comparar a média geral de quem corre em casa com quem corre fora mistura muita coisa (piloto local convidado com carro ruim, por exemplo).
+-- MAGIC Por isso comparo o mesmo piloto na mesma temporada: GP de casa contra a média dele nas outras corridas do ano.
 
 -- COMMAND ----------
 
@@ -239,7 +234,7 @@ FROM por_piloto_ano;
 
 -- COMMAND ----------
 
--- Por país do piloto (mínimo de 30 largadas em casa)
+-- por país (mínimo de 30 largadas em casa)
 SELECT p.pais,
        SUM(CASE WHEN f.flag_em_casa THEN 1 ELSE 0 END)                              AS largadas_em_casa,
        ROUND(AVG(CASE WHEN f.flag_em_casa THEN f.posicao_final END), 2)             AS pos_media_casa,
@@ -254,13 +249,13 @@ ORDER BY pos_media_fora - pos_media_casa DESC;
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P5:** _(preencher)_ — a diferença é relevante ou é ruído? em quais países aparece mais?
--- MAGIC limitação: pilotos locais convidados (carros fracos) aparecem só no GP de casa e são excluídos pela comparação pareada.
+-- MAGIC **Conclusão:** A vantagem existe, mas é pequena: 0,09 posição em média e 55% dos casos melhores em casa. Pódio sobe de 12,7% para 14%. Não daria pra afirmar que não é ruído.
+-- MAGIC A tabela por país mostra por que precisei da comparação pareada: EUA e Reino Unido aparecem piores em casa por causa de piloto local que só corria o GP de casa.
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## P6 · As temporadas ficaram mais ou menos competitivas?
+-- MAGIC ## Pergunta 6 - As temporadas ficaram mais ou menos disputadas?
 
 -- COMMAND ----------
 
@@ -276,7 +271,7 @@ ORDER BY era_regulamentar;
 
 -- COMMAND ----------
 
--- Temporadas mais dominadas e mais disputadas
+-- top 5 mais dominadas e top 5 mais disputadas
 (SELECT 'mais dominada' AS tipo, ano, equipe_mais_vitoriosa, pct_vitorias_equipe_top, campeao, margem_campeao_pct
  FROM gold.agg_temporada ORDER BY pct_vitorias_equipe_top DESC LIMIT 5)
 UNION ALL
@@ -295,18 +290,17 @@ UNION ALL
 -- MAGIC ax1.set_ylabel("% vitórias da equipe top")
 -- MAGIC ax2 = ax1.twinx(); ax2.bar(df.ano, df.vencedores, alpha=.3, color="#1f4e79", label="vencedores distintos")
 -- MAGIC ax2.set_ylabel("vencedores distintos")
--- MAGIC ax1.set_title("Domínio por temporada: % de vitórias da equipe mais vitoriosa × nº de vencedores")
+-- MAGIC ax1.set_title("% de vitórias da equipe mais vitoriosa x número de vencedores, por temporada")
 -- MAGIC fig.tight_layout(); plt.show()
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC **Discussão P6:** _(preencher)_ — a era híbrida foi a mais dominada? as mudanças de regulamento (2014, 2022)
--- MAGIC criaram novos dominantes? houve temporadas decididas por margem mínima?
+-- MAGIC **Conclusão:** A era híbrida foi a mais dominada (71% das vitórias para a equipe top) e 2023 foi a temporada mais dominada de todas (Red Bull com 95,5%). A mais equilibrada foi 1968-1982.
+-- MAGIC Domínio de equipe não quer dizer campeonato fácil: em 2016 a Mercedes venceu 90% das corridas e o título foi decidido por 1,3%, com a briga entre os dois pilotos dela. O título mais apertado foi 1984 (Lauda por meio ponto).
 
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## Discussão geral
--- MAGIC _(preencher)_ — conecte as respostas ao problema: o que mais decide uma corrida e um campeonato (grid, carro,
--- MAGIC piloto, confiabilidade, estratégia) e como o peso de cada fator mudou entre as eras.
+-- MAGIC ## Conclusão geral
+-- MAGIC Até os anos 90 o que mais decidia era chegar ao fim, porque metade do grid quebrava. Com os carros confiáveis, o peso foi para a classificação: largar na frente nunca valeu tanto. O carro continua sendo o fator principal (eras longas de uma equipe só), o piloto aparece mais contra o companheiro, e estratégia de pit e correr em casa pesam pouco perto disso.

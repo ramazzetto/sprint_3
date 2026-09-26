@@ -1,18 +1,15 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 01 · Coleta via API do Kaggle → Bronze
+# MAGIC # 01 - Ingestão (Kaggle -> Bronze)
 # MAGIC
-# MAGIC **Fonte:** Kaggle, dataset [`rohanrao/formula-1-world-championship-1950-2020`](https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020)
-# MAGIC ("Formula 1 World Championship (1950 - 2024)", licença **CC0: Public Domain**). É uma cópia do banco relacional
-# MAGIC **Ergast Motor Racing Database**, com 14 arquivos CSV.
+# MAGIC Fonte: dataset [Formula 1 World Championship (1950 - 2024)](https://www.kaggle.com/datasets/rohanrao/formula-1-world-championship-1950-2020) do Kaggle, licença CC0.
+# MAGIC Ele é uma cópia do Ergast (banco relacional com histórico da F1) e vem em 14 CSVs.
 # MAGIC
-# MAGIC **Fluxo deste notebook**
-# MAGIC 1. Autentica na API do Kaggle com um **API Token** (padrão atual do Kaggle). O token vem de um *secret scope*
-# MAGIC    ou de um arquivo guardado no volume `config.credenciais`, e **nunca é escrito no código**.
-# MAGIC 2. Baixa e descompacta o dataset no volume `landing.arquivos`.
-# MAGIC 3. Grava cada CSV como uma tabela Delta na Bronze, **sem alterar valores**. Todas as colunas ficam como texto e o
-# MAGIC    marcador de nulo do Ergast (`\N`) é mantido como veio.
-# MAGIC 4. Registra a carga na tabela de controle `bronze.controle_ingestao`.
+# MAGIC O que o notebook faz:
+# MAGIC 1. autentica na API do Kaggle com o token guardado no volume de credenciais
+# MAGIC 2. baixa e descompacta os CSVs no volume `landing.arquivos`
+# MAGIC 3. grava cada CSV como tabela Delta na Bronze, sem mexer em nada (tudo como texto, inclusive o `\N`)
+# MAGIC 4. registra a carga numa tabela de controle
 
 # COMMAND ----------
 
@@ -24,9 +21,9 @@ CATALOGO = "mvp_f1"
 DATASET_KAGGLE = "rohanrao/formula-1-world-championship-1950-2020"
 PASTA_LANDING = f"/Volumes/{CATALOGO}/landing/arquivos"
 PASTA_CREDENCIAIS = f"/Volumes/{CATALOGO}/config/credenciais"
-ARQUIVO_TOKEN = f"{PASTA_CREDENCIAIS}/kaggle_token.txt"   # API Token (recomendado pelo Kaggle)
-ARQUIVO_LEGADO = f"{PASTA_CREDENCIAIS}/kaggle.json"       # Legacy API Credentials (alternativa)
-FORCAR_DOWNLOAD = False   # True = baixa de novo mesmo que os arquivos já estejam no volume
+ARQUIVO_TOKEN = f"{PASTA_CREDENCIAIS}/kaggle_token.txt"
+ARQUIVO_LEGADO = f"{PASTA_CREDENCIAIS}/kaggle.json"
+FORCAR_DOWNLOAD = False
 
 ARQUIVOS_ESPERADOS = [
     "circuits", "constructor_results", "constructor_standings", "constructors",
@@ -37,25 +34,20 @@ ARQUIVOS_ESPERADOS = [
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 1–2. Autenticação e download
-# MAGIC **Como configurar a credencial (uma vez):** no Kaggle, *Settings → API Tokens → Generate New Token* e copie o token.
-# MAGIC Depois, escolha uma opção (a primeira encontrada é usada):
-# MAGIC - **Opção A:** secret scope, pela CLI do Databricks: `databricks secrets create-scope kaggle` e
-# MAGIC   `databricks secrets put-secret kaggle token`.
-# MAGIC - **Opção B:** salvar o token (só o texto do token, uma linha) num arquivo `kaggle_token.txt` e enviar pela UI para
-# MAGIC   *Catalog → mvp_f1 → config → credenciais*.
-# MAGIC - **Opção C (legado):** enviar o `kaggle.json` gerado em *Legacy API Credentials* para o mesmo volume.
+# MAGIC ### Autenticação e download
+# MAGIC Aqui tive um problema: a primeira versão usava o `kaggle.json` (usuário + chave), mas o Kaggle mudou e hoje gera um API Token, que é um texto só.
+# MAGIC Ajustei para ler o token de um arquivo `kaggle_token.txt` no volume `config.credenciais`. Deixei o `kaggle.json` como alternativa e também a opção de secret scope.
 # MAGIC
-# MAGIC A biblioteca `kaggle` se autentica sozinha **no momento do import**, lendo as variáveis de ambiente
-# MAGIC (`KAGGLE_API_TOKEN` ou `KAGGLE_USERNAME`/`KAGGLE_KEY`). Por isso as variáveis são definidas antes do `import kaggle`,
-# MAGIC e usamos o objeto já autenticado `kaggle.api`.
+# MAGIC Detalhe que me custou um tempo: a biblioteca se autentica sozinha no `import kaggle`, então a variável de ambiente tem que ser definida antes do import.
+# MAGIC
+# MAGIC Se os arquivos já estiverem no volume, o download é pulado (dá pra forçar com `FORCAR_DOWNLOAD = True`).
 
 # COMMAND ----------
 
 import os, json
 
 def carregar_credenciais_kaggle():
-    """Define as variáveis de ambiente de autenticação do Kaggle. Retorna de onde a credencial veio."""
+    # tenta secret scope, depois o txt, depois o kaggle.json antigo
     try:
         os.environ["KAGGLE_API_TOKEN"] = dbutils.secrets.get("kaggle", "token")
         return "secret scope 'kaggle' (API Token)"
@@ -78,7 +70,7 @@ def arquivos_presentes():
 
 if FORCAR_DOWNLOAD or not set(ARQUIVOS_ESPERADOS) <= arquivos_presentes():
     origem = carregar_credenciais_kaggle()
-    import kaggle            # autentica no import, usando as variáveis definidas acima
+    import kaggle            # autentica aqui, no import
     api = kaggle.api
     print(f"Autenticado no Kaggle via {origem}. Baixando {DATASET_KAGGLE} ...")
     api.dataset_download_files(DATASET_KAGGLE, path=PASTA_LANDING, unzip=True, quiet=False)
@@ -92,8 +84,7 @@ display(dbutils.fs.ls(PASTA_LANDING))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Inspeção do arquivo bruto
-# MAGIC Antes de ler com Spark, olhamos o início de um arquivo para confirmar separador (`,`), aspas e o marcador de nulo (`\N`).
+# MAGIC Dando uma olhada no começo de um arquivo antes de ler com Spark (separador, aspas e o tal do `\N`):
 
 # COMMAND ----------
 
@@ -103,9 +94,8 @@ with open(f"{PASTA_LANDING}/results.csv", "rb") as f:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 3. Gravação na Bronze
-# MAGIC Uma tabela por arquivo, com o mesmo nome (`bronze.results`, `bronze.drivers`, …).
-# MAGIC Colunas mantêm o nome original do Ergast (camelCase) e todas são `STRING`.
+# MAGIC ### Gravando na Bronze
+# MAGIC Uma tabela por arquivo, mesmo nome do CSV. Mantive os nomes de coluna originais (camelCase) e tudo como string, a tipagem fica pra Silver.
 
 # COMMAND ----------
 
@@ -115,12 +105,12 @@ controle = []
 for nome in ARQUIVOS_ESPERADOS:
     df = (spark.read
           .option("header", True)
-          .option("inferSchema", False)     # tudo texto: tipagem é responsabilidade da Silver
+          .option("inferSchema", False)
           .option("quote", '"')
           .option("escape", '"')
           .option("encoding", "UTF-8")
           .csv(f"{PASTA_LANDING}/{nome}.csv"))
-    df = df.toDF(*[c.replace("﻿", "").strip() for c in df.columns])   # remove BOM, se houver
+    df = df.toDF(*[c.replace("﻿", "").strip() for c in df.columns])   # tira o BOM se tiver
     df = (df.withColumn("_arquivo_origem", F.lit(f"{nome}.csv"))
             .withColumn("_fonte", F.lit(f"kaggle:{DATASET_KAGGLE}"))
             .withColumn("_data_ingestao", F.current_timestamp()))
@@ -133,7 +123,7 @@ for nome in ARQUIVOS_ESPERADOS:
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4. Tabela de controle e descrições
+# MAGIC ### Descrições das tabelas e controle de carga
 
 # COMMAND ----------
 
@@ -151,7 +141,7 @@ descricoes = {
     "results": "Resultado de cada piloto em cada corrida",
     "seasons": "Temporadas",
     "sprint_results": "Resultado das corridas sprint",
-    "status": "Situação final do piloto na corrida (terminou, acidente, motor, …)",
+    "status": "Situação final do piloto na corrida (terminou, acidente, motor etc.)",
 }
 for nome, desc in descricoes.items():
     spark.sql(f"COMMENT ON TABLE {CATALOGO}.bronze.{nome} IS 'Bronze (como veio do Kaggle/Ergast, tudo texto, nulo = \\\\N): {desc}.'")

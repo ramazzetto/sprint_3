@@ -1,38 +1,18 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 03 · Transformação → Silver
+# MAGIC # 03 - Silver
 # MAGIC
-# MAGIC Aplica as regras definidas no perfil de qualidade (`02_qualidade_bronze`). Cada entidade vira uma tabela
-# MAGIC limpa, tipada e com nomes em português `snake_case`.
+# MAGIC Aqui aplico os tratamentos que levantei no notebook 02. Cada entidade vira uma tabela limpa, tipada e com nome em português.
 # MAGIC
-# MAGIC | Bronze | → Silver | Usada nas perguntas |
-# MAGIC |---|---|---|
-# MAGIC | circuits | `silver.circuitos` | P1, P5 |
-# MAGIC | constructors | `silver.equipes` | P3, P4 |
-# MAGIC | drivers | `silver.pilotos` | P4, P5 |
-# MAGIC | races | `silver.corridas` | todas |
-# MAGIC | status | `silver.status` | P3 |
-# MAGIC | results | `silver.resultados` | todas |
-# MAGIC | qualifying | `silver.classificacao_grid` | P4 |
-# MAGIC | pit_stops | `silver.pit_stops` | P2 |
-# MAGIC | driver_standings | `silver.campeonato_pilotos` | P6 |
-# MAGIC | constructor_standings | `silver.campeonato_equipes` | P6 |
+# MAGIC Tabelas que gerei: circuitos, equipes, pilotos, corridas, status, resultados, classificacao_grid, pit_stops, campeonato_pilotos e campeonato_equipes.
 # MAGIC
-# MAGIC **Não levadas à Silver (decisão de escopo do MVP):** `lap_times` (cerca de 600 mil voltas, sem pergunta que a use),
-# MAGIC `sprint_results` (formato criado em 2021, poucas corridas), `constructor_results` (redundante com
-# MAGIC `constructor_standings`) e `seasons` (só ano + URL). Elas continuam na Bronze para trabalhos futuros.
+# MAGIC Deixei de fora da Silver (continuam na Bronze):
+# MAGIC - lap_times: quase 600 mil linhas e nenhuma das minhas perguntas usa tempo volta a volta
+# MAGIC - sprint_results: sprint só existe desde 2021, são poucas corridas
+# MAGIC - constructor_results: a informação já está em constructor_standings
+# MAGIC - seasons: só tem o ano e um link da Wikipedia
 # MAGIC
-# MAGIC **Transformações gerais**
-# MAGIC | # | Transformação | Por quê |
-# MAGIC |---|---|---|
-# MAGIC | T1 | `\N` e vazio → `NULL` | O Ergast usa o texto `\N` como nulo; sem isso, casts e contagens ficam errados |
-# MAGIC | T2 | Tipagem com `try_cast` (`INT`, `DOUBLE`, `DATE`, `BIGINT`) | Permite cálculos; `try_cast` devolve `NULL` em vez de quebrar o pipeline |
-# MAGIC | T3 | Tempos `m:ss.sss` → milissegundos | Permite comparar e fazer médias de tempos |
-# MAGIC | T4 | Padronização de país e nacionalidade | `USA` × `United States`, `Argentinian ` × `Argentine` |
-# MAGIC | T5 | De-para nacionalidade → país | Permite comparar piloto × país do circuito (P5) |
-# MAGIC | T6 | Categoria de status | Agrupa 130+ status em 5 categorias (P3) |
-# MAGIC | T7 | `grid = 0` → `NULL` + flag | 0 é largada dos boxes / não largou, não uma posição |
-# MAGIC | T8 | `flag_parada_atipica` em pit stops | Paradas de minutos (bandeira vermelha, reparo) distorcem médias |
+# MAGIC Funções auxiliares da célula abaixo: `nul` troca `\N` e vazio por NULL, `tipo` faz o cast com try_cast (se não converter vira NULL em vez de quebrar) e `tempo_ms` converte "1:23.456" em milissegundos.
 
 # COMMAND ----------
 
@@ -42,7 +22,6 @@ B, S = f"{CATALOGO}.bronze", f"{CATALOGO}.silver"
 from pyspark.sql import functions as F, Window
 
 def nul(c):
-    """T1: '\\N', vazio e espaços -> NULL; demais valores com TRIM."""
     v = F.trim(F.col(c))
     return F.when(v.isNull() | v.isin("\\N", ""), None).otherwise(v)
 
@@ -50,11 +29,10 @@ def nul_sql(c):
     return f"nullif(nullif(trim(`{c}`), '\\\\N'), '')"
 
 def tipo(c, t):
-    """T2: conversão segura com try_cast (NULL se não converter; funciona com ANSI mode ligado)."""
     return F.expr(f"try_cast({nul_sql(c)} AS {t})")
 
 def tempo_ms(c):
-    """T3: 'm:ss.sss' ou 'ss.sss' -> milissegundos (BIGINT)."""
+    # aceita "1:23.456" e "23.456"
     v = nul_sql(c)
     return F.expr(f"""
       CAST(ROUND(CASE
@@ -63,7 +41,7 @@ def tempo_ms(c):
         ELSE try_cast({v} AS DOUBLE) * 1000 END) AS BIGINT)""")
 
 def gravar(df, nome, descricao, comentarios):
-    """Grava a tabela Silver e registra descrições de tabela e colunas no Unity Catalog."""
+    # grava e já coloca as descrições no catálogo
     tabela = f"{S}.{nome}"
     df = df.withColumn("_data_processamento", F.current_timestamp())
     df.write.format("delta").mode("overwrite").option("overwriteSchema", True).saveAsTable(tabela)
@@ -76,7 +54,8 @@ def gravar(df, nome, descricao, comentarios):
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Circuitos (T4: padronização de país)
+# MAGIC ### Circuitos
+# MAGIC Padronizando o país (USA, UK e UAE para o nome completo). Korea também, porque o circuito é na Coreia do Sul.
 
 # COMMAND ----------
 
@@ -127,9 +106,9 @@ gravar(equipes, "equipes", "Silver: equipes (construtores). Linhagem: bronze.con
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Pilotos (T4 + T5: nacionalidade padronizada e país)
-# MAGIC O de-para abaixo é um **enriquecimento manual documentado**: o Ergast guarda a nacionalidade (adjetivo) e o circuito
-# MAGIC guarda o país (substantivo). Para responder "o piloto corre em casa?" (P5) é preciso ligar os dois.
+# MAGIC ### Pilotos
+# MAGIC Para a pergunta 5 (piloto corre melhor em casa?) precisei ligar o piloto ao país do circuito. Só que o piloto tem nacionalidade ("Brazilian") e o circuito tem país ("Brazil").
+# MAGIC Montei um de-para na mão. Coloquei um assert logo depois para avisar se aparecer alguma nacionalidade nova que eu não mapeei.
 
 # COMMAND ----------
 
@@ -208,7 +187,8 @@ gravar(corridas, "corridas", "Silver: corridas (Grandes Prêmios). Linhagem: bro
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Status (T6: categorização)
+# MAGIC ### Status
+# MAGIC Agrupei os mais de 130 status em poucas categorias. O que não é acidente, problema do piloto ou desclassificação acabou caindo em falha mecânica (Engine, Gearbox, Hydraulics etc.).
 
 # COMMAND ----------
 
@@ -241,7 +221,8 @@ display(spark.table(f"{S}.status").groupBy("categoria_status").count())
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Resultados (T7: grid 0)
+# MAGIC ### Resultados
+# MAGIC grid = 0 vira NULL (não é posição de largada) e ganha uma flag.
 
 # COMMAND ----------
 
@@ -290,7 +271,7 @@ gravar(resultados, "resultados", "Silver: resultado de cada piloto em cada corri
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Classificação (qualifying) (T3: tempos em ms)
+# MAGIC ### Classificação (qualifying)
 
 # COMMAND ----------
 
@@ -320,9 +301,9 @@ gravar(q, "classificacao_grid", "Silver: resultado da classificação (qualifyin
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Pit stops (T8: paradas atípicas)
-# MAGIC Usamos `milliseconds` (numérico) e não `duration`: `duration` muda de formato (`23.4` × `16:44.718`) quando passa de 60 s.
-# MAGIC Regra de atípica: duração acima de Q3 + 3·IQR **da mesma temporada** (o tempo de pit lane muda com o regulamento).
+# MAGIC ### Pit stops
+# MAGIC Usei a coluna `milliseconds` em vez de `duration`, porque a `duration` muda de formato quando passa de 60s (vira "16:44.718").
+# MAGIC Parada atípica = acima de Q3 + 3*IQR da mesma temporada.
 
 # COMMAND ----------
 
@@ -378,7 +359,8 @@ for bronze, silver, chave, fk in [("driver_standings", "campeonato_pilotos", "dr
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### Validações da Silver (falham o notebook se não passarem)
+# MAGIC ### Conferência final
+# MAGIC Se alguma dessas contagens não for zero o notebook para com erro.
 
 # COMMAND ----------
 
@@ -393,4 +375,4 @@ SELECT
 """).collect()[0]
 print(chk.asDict())
 assert all(v == 0 for v in chk.asDict().values()), chk
-print("Validações da Silver OK")
+print("Silver ok")

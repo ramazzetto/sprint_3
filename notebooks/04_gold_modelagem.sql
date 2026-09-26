@@ -1,30 +1,21 @@
 -- Databricks notebook source
 -- MAGIC %md
--- MAGIC # 04 · Modelagem → Gold (Esquema Estrela)
+-- MAGIC # 04 - Gold (modelo estrela)
 -- MAGIC
--- MAGIC ```
--- MAGIC                  dim_corrida (inclui circuito e era)
--- MAGIC                        │
--- MAGIC   dim_piloto ── fato_resultado ── dim_equipe          fato_pit_stop ── (mesmas dimensões)
--- MAGIC                        │
--- MAGIC                    dim_status
--- MAGIC ```
+-- MAGIC Modelei em estrela com duas tabelas fato que compartilham as mesmas dimensões:
+-- MAGIC - `fato_resultado`: uma linha por piloto em cada corrida
+-- MAGIC - `fato_pit_stop`: uma linha por parada nos boxes
+-- MAGIC - dimensões: `dim_corrida`, `dim_piloto`, `dim_equipe` e `dim_status`
 -- MAGIC
--- MAGIC **Duas fatos, dimensões compartilhadas (conformadas):**
--- MAGIC - `fato_resultado`: **1 linha por piloto × corrida** (grid, posição, pontos, status, paradas…)
--- MAGIC - `fato_pit_stop`: **1 linha por parada nos boxes**
+-- MAGIC O diagrama está no README. Algumas decisões que tomei:
 -- MAGIC
--- MAGIC **Decisões de modelagem**
--- MAGIC - **Estrela, não snowflake:** o circuito é desnormalizado dentro de `dim_corrida` (nome, cidade, país, coordenadas),
--- MAGIC   então as análises por circuito/país precisam de um único join.
--- MAGIC - **Chaves:** os ids do Ergast (`race_id`, `driver_id`…) já são inteiros sem significado de negócio e estáveis entre
--- MAGIC   versões do dataset. Por isso são reaproveitados como chaves das dimensões, sem gerar novas chaves.
--- MAGIC - **Era regulamentar** em `dim_corrida`: a F1 muda de regulamento em blocos. Comparar 1960 com 2020 sem esse
--- MAGIC   contexto leva a conclusões erradas.
--- MAGIC - **Medidas derivadas na fato** (`posicoes_ganhas`, `flag_vitoria`, `flag_em_casa`, `idade_piloto`…): calculadas uma
--- MAGIC   vez na carga, deixam as consultas de análise simples.
--- MAGIC - **PK/FK informativas** do Unity Catalog documentam o modelo e habilitam o diagrama de relacionamentos no Catalog Explorer.
--- MAGIC - Carga completa e idempotente (`CREATE OR REPLACE`); as fatos são removidas primeiro por causa das FKs.
+-- MAGIC - Coloquei os dados do circuito dentro da `dim_corrida` em vez de criar uma `dim_circuito` separada. Fica um join a menos nas análises por país/circuito e a tabela é pequena.
+-- MAGIC - Não criei chaves substitutas novas. Os ids do Ergast já são inteiros sem significado e não mudam entre versões do dataset, então reaproveitei.
+-- MAGIC - Criei a coluna de era regulamentar na `dim_corrida`. Comparar 1960 com 2020 sem separar por regulamento não faz muito sentido (motor, pneus, sistema de pontos, tudo muda).
+-- MAGIC - Deixei algumas colunas já calculadas na fato (posições ganhas, idade do piloto, vitória, pódio, corre em casa etc.) para as consultas do notebook 05 ficarem mais simples.
+-- MAGIC - As PKs e FKs no Unity Catalog são só informativas (o Databricks não obriga), mas ajudam a documentar e aparecem no diagrama do Catalog Explorer.
+-- MAGIC
+-- MAGIC Obs: na primeira vez que rodei de novo deu erro no CREATE OR REPLACE das dimensões por causa das FKs. Por isso apago as fatos antes.
 
 -- COMMAND ----------
 
@@ -46,7 +37,7 @@ CREATE OR REPLACE TABLE gold.dim_corrida (
   sk_corrida               INT     NOT NULL COMMENT 'PK. Id da corrida no Ergast (race_id).',
   ano                      INT              COMMENT 'Temporada. Domínio: 1950-2024. Origem: silver.corridas.ano.',
   decada                   INT              COMMENT 'Década da temporada (1950, 1960...). Derivado de ano.',
-  era_regulamentar         STRING           COMMENT 'Bloco de regulamento técnico (ver notebook 04). Domínio: 9 eras de 1950-1967 a 2022-2024. Derivado de ano.',
+  era_regulamentar         STRING           COMMENT 'Bloco de regulamento técnico (ver notebook 04). Domínio: 8 eras de 1950-1967 a 2022-2024. Derivado de ano.',
   rodada                   INT              COMMENT 'Etapa dentro da temporada (>= 1). Origem: silver.corridas.rodada.',
   total_rodadas_temporada  INT              COMMENT 'Número de corridas da temporada. Derivado.',
   flag_ultima_corrida      BOOLEAN          COMMENT 'TRUE se é a última etapa da temporada (usada para o campeonato final). Derivado.',
@@ -240,8 +231,9 @@ LEFT JOIN (SELECT race_id, driver_id, MIN(constructor_id) AS constructor_id
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## Agregado: resumo de cada temporada
--- MAGIC Base da pergunta sobre competitividade. Usa a classificação do campeonato **após a última corrida** de cada ano.
+-- MAGIC ## agg_temporada
+-- MAGIC Resumo por ano, usado na pergunta sobre competitividade. Pega a classificação do campeonato depois da última corrida de cada temporada.
+-- MAGIC A margem do campeão é em %, porque o sistema de pontos mudou várias vezes e comparar pontos absolutos não daria certo.
 
 -- COMMAND ----------
 
@@ -303,7 +295,7 @@ ALTER TABLE gold.agg_temporada ALTER COLUMN margem_campeao_pct      COMMENT '(po
 -- COMMAND ----------
 
 -- MAGIC %md
--- MAGIC ## Evidência: contagens e integridade referencial
+-- MAGIC ## Conferindo a carga
 
 -- COMMAND ----------
 
@@ -317,7 +309,7 @@ UNION ALL SELECT 'agg_temporada', COUNT(*) FROM gold.agg_temporada;
 
 -- COMMAND ----------
 
--- Todas as colunas devem ser 0 (nenhuma linha órfã nas fatos)
+-- tudo tem que dar 0
 SELECT
   (SELECT COUNT(*) FROM gold.fato_resultado f LEFT ANTI JOIN gold.dim_corrida d ON f.sk_corrida = d.sk_corrida) AS res_sem_corrida,
   (SELECT COUNT(*) FROM gold.fato_resultado f LEFT ANTI JOIN gold.dim_piloto d  ON f.sk_piloto = d.sk_piloto)   AS res_sem_piloto,
@@ -328,7 +320,7 @@ SELECT
 
 -- COMMAND ----------
 
--- Cobertura temporal de cada fonte (importante para interpretar P2 e P4)
+-- de que ano até que ano tem dado de cada coisa (importante para as perguntas 2 e 4)
 SELECT 'resultados' AS dado, MIN(d.ano) AS de, MAX(d.ano) AS ate FROM gold.fato_resultado f JOIN gold.dim_corrida d ON f.sk_corrida = d.sk_corrida
 UNION ALL
 SELECT 'qualifying', MIN(d.ano), MAX(d.ano) FROM gold.fato_resultado f JOIN gold.dim_corrida d ON f.sk_corrida = d.sk_corrida WHERE f.posicao_classificacao IS NOT NULL
